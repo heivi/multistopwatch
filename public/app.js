@@ -345,13 +345,15 @@ function renderStopwatch(stopwatch) {
 		<h4 class="stopwatch-name">${stopwatch.name}</h4>
 		<p class="stopwatch-time">00:00:000</p>
 		<div class="stopwatch-buttons">
-			<button class="start-btn" data-id="${stopwatch.id}"><i class="fa-solid fa-play"></i></button>
-			<button class="stop-btn" data-id="${stopwatch.id}"><i class="fa-solid fa-stop"></i></button>
-			<button class="lap-btn" data-id="${stopwatch.id}"><i class="fa-solid fa-plus"></i></button>
-			<button class="reset-btn" data-id="${stopwatch.id}"><i class="fa-solid fa-redo"></i></button>
-			<button class="remove-btn" data-id="${stopwatch.id}"><i class="fa-solid fa-trash"></i></button>
-			<button class="journal-btn" data-id="${stopwatch.id}"><i class="fa-solid fa-history"></i></button>
-			<button class="lap-times-btn" data-id="${stopwatch.id}"><i class="fa-solid fa-list"></i></button>
+			<button class="start-btn btn-success" data-id="${stopwatch.id}"><i class="fa-solid fa-play"></i></button>
+			<button class="stop-btn btn-warning" data-id="${stopwatch.id}"><i class="fa-solid fa-stop"></i></button>
+			<button class="lap-btn btn-secondary" data-id="${stopwatch.id}"><i class="fa-solid fa-plus"></i></button>
+		</div>
+		<div class="stopwatch-buttons stopwatch-buttons-smaller">
+			<button class="reset-btn btn-warning" data-id="${stopwatch.id}"><i class="fa-solid fa-redo"></i></button>
+			<button class="remove-btn btn-danger" data-id="${stopwatch.id}"><i class="fa-solid fa-trash"></i></button>
+			<button class="journal-btn btn-info" data-id="${stopwatch.id}"><i class="fa-solid fa-history"></i></button>
+			<button class="lap-times-btn btn-dark" data-id="${stopwatch.id}"><i class="fa-solid fa-list"></i></button>
 		</div>
 		<ul class="journal-list" style="display:none" id="journal-list-${stopwatch.id}" data-id="${stopwatch.id}"></ul>
 		<div id="lap-times-container-${stopwatch.id}" style="display:none"></div>
