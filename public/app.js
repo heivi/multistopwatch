@@ -61,7 +61,7 @@ function renderDeletedStopwatches() {
 			const stopwatchHtml = `
                 <div>
                     <span>${stopwatch.name} (${source})</span>
-                    <button class="btn btn-success recover-btn" data-id="${stopwatch.id}"><i class="fa-solid fa-recycle">Recover</i></button>
+                    <button class="btn btn-success recover-btn" data-id="${stopwatch.id}"><i class="fa-solid fa-recycle"></i></button>
                 </div>
             `;
 			container.append(stopwatchHtml);
