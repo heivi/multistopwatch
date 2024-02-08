@@ -15,6 +15,9 @@
   <div class="container mt-4">
     <h2 class="mb-4">Multi-Stopwatch App</h2>
 
+	<button id="showDeletedBtn" class="btn btn-info" style="position: fixed; top: 10px; right: 10px;">Show Deleted Stopwatches</button>
+	<div id="deletedStopwatchesContainer" style="display: none; position: fixed; top: 50px; right: 10px; background-color: #f9f9f9; padding: 10px; border: 1px solid #ccc;"></div>
+
     <!-- Add a new stopwatch -->
     <div class="form-inline mb-4">
       <div class="form-group mr-2">
@@ -28,7 +31,7 @@
     <div id="stopwatches-container"></div>
   </div>
 
-  <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+  <script src="https://code.jquery.com/jquery-3.7.1.slim.min.js"></script>
   <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/timesync"></script>
   <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
