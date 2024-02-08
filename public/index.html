@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Multi-Stopwatch App</title>
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+  <link href="./fontawesome/free/css/fontawesome.css" rel="stylesheet">
+  <link href="./fontawesome/free/css/solid.css" rel="stylesheet">
+  <link rel="stylesheet" href="stopwatch.css">
+</head>
+<body>
+  <div class="container mt-4">
+    <h2 class="mb-4">Multi-Stopwatch App</h2>
+
+	<input type="text" id="userName" placeholder="Your Name">
+
+	<span id="offset" style="position: fixed; bottom: 10px; left: 10px;">Not synced</span>
+	<button id="showDeletedBtn" class="btn btn-info" style="position: fixed; top: 10px; right: 10px;"><i class="fa-solid fa-trash"></i></button>
+	<div id="deletedStopwatchesContainer" style="display: none; position: fixed; top: 50px; right: 10px; background-color: #f9f9f9; padding: 10px; border: 1px solid #ccc;"></div>
+
+    <!-- Add a new stopwatch -->
+    <div class="form-inline mb-4">
+      <div class="form-group mr-2">
+        <label for="stopwatchName">Stopwatch Name:</label>
+        <input type="text" class="form-control" id="stopwatchName" placeholder="Enter name">
+      </div>
+      <button type="button" class="btn btn-primary" id="addStopwatchBtn">Add Stopwatch</button>
+    </div>
+
+    <!-- Stopwatches container -->
+    <div id="stopwatches-container"></div>
+  </div>
+
+  <script src="https://code.jquery.com/jquery-3.7.1.slim.min.js"></script>
+  <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/timesync"></script>
+  <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

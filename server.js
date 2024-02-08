@@ -14,6 +14,7 @@ const io = socketIo(server, {
 });
 
 app.use(cors()); // Allow CORS for all origins
+app.use(express.static('public'));
 
 const port = process.env.PORT || 3000;
 
