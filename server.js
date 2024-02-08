@@ -157,6 +157,8 @@ io.on('connection', (socket) => {
 			time: data.time,
 			clientId: data.clientId,
 			enabled: data.enabled,
+			eventTime: data.eventTime,
+			eventType: data.eventType,
 		};
 
 		socket.broadcast.emit('toggleEvent', event);

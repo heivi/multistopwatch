@@ -1,5 +1,9 @@
 // app.js
 
+if ("serviceWorker" in navigator) {
+	navigator.serviceWorker.register("./sw.js");
+}
+
 const socket = io('/');
 let ts = timesync.create({
 	server: '/timesync', // endpoint for the timesync server
@@ -57,7 +61,7 @@ function renderDeletedStopwatches() {
 			const stopwatchHtml = `
                 <div>
                     <span>${stopwatch.name} (${source})</span>
-                    <button class="btn btn-success recover-btn" data-id="${stopwatch.id}"><i class="fa-solid fa-reload">Recover</i></button>
+                    <button class="btn btn-success recover-btn" data-id="${stopwatch.id}"><i class="fa-solid fa-recycle">Recover</i></button>
                 </div>
             `;
 			container.append(stopwatchHtml);
@@ -139,6 +143,10 @@ function loadStopwatchesFromJournal(journal) {
 		// Update the stopwatch state based on the event type
 		stopwatch.journal.push({ type, time, enabled, clientId: event.clientId, source: "syncJournal", ...(type == 'add' && { name: event.name }) });
 
+		if (type == 'toggleEvent') {
+			//
+		}
+
 		if (type == 'add') {
 			stopwatch.name = event.name;
 
@@ -208,6 +216,9 @@ socket.on('syncJournal', (journal) => {
 		if (!$(`#stopwatch-${stopwatch.id}`).length) {
 			renderStopwatch(stopwatch);
 			renderStopwatchTime(stopwatch.id);
+		} else {
+			updateLaps(stopwatch.id, false);
+			updateJournalList(stopwatch.id, false);
 		}
 	});
 });
@@ -227,6 +238,7 @@ socket.on('start', (event) => {
 		renderStopwatchTime(stopwatchId);
 		updateLocalStopwatches();
 		updateJournalList(stopwatchId, false);
+		updateLaps(stopwatchId, false);
 	}
 });
 
@@ -240,6 +252,7 @@ socket.on('stop', (event) => {
 		renderStopwatchTime(stopwatchId);
 		updateLocalStopwatches();
 		updateJournalList(stopwatchId, false);
+		updateLaps(stopwatchId, false);
 	}
 });
 
@@ -267,6 +280,7 @@ socket.on('reset', (event) => {
 		renderStopwatchTime(stopwatchId);
 		updateLocalStopwatches();
 		updateJournalList(stopwatchId, false);
+		updateLaps(stopwatchId, false);
 	}
 });
 
@@ -391,6 +405,7 @@ function updateJournalList(stopwatchId, toggle) {
 
 		let items = "";
 		stopwatch.journal.forEach((event, index) => {
+			if (event.type == 'toggleEvent') return;
 			const checked = event.enabled ? 'checked' : '';
 			const listItem = `<li class="list-group-item" data-index="${index}"><input type="checkbox" ${checked}> ${event.type} - ${new Date(event.time).toLocaleString()} - ${event.clientId == clientId ? "Me" : event.clientId} - ${event.source || ""}</li>`;
 			items = items.concat(listItem);
@@ -402,6 +417,7 @@ function updateJournalList(stopwatchId, toggle) {
 
 // Handle click event for toggling journal item
 $(document).on('change', '.journal-list li', function () {
+	const toggleTime = new Date(ts.now()).getTime();
 	const stopwatchId = $(this).closest('ul').data('id');
 	const index = $(this).data('index');
 	const stopwatch = stopwatches.find(stopwatch => stopwatch.id === stopwatchId);
@@ -411,19 +427,19 @@ $(document).on('change', '.journal-list li', function () {
 		updateLocalStopwatches();
 		updateLaps(stopwatchId, false);
 		// Emit event to server to synchronize status
-		socket.emit('toggleEvent', { stopwatchId, time: stopwatch.journal[index].time, type: stopwatch.journal[index].type, enabled: stopwatch.journal[index].enabled, clientId });
+		socket.emit('toggleEvent', { stopwatchId, time: toggleTime, type: 'toggleEvent', eventTime: stopwatch.journal[index].time, eventType: stopwatch.journal[index].type, enabled: stopwatch.journal[index].enabled, clientId });
 	}
 });
 
 // Listen for toggleEvent from the server to sync journal toggles
 socket.on('toggleEvent', (event) => {
-	const { type, stopwatchId, time, clientId, enabled } = event;
+	const { type, stopwatchId, time, clientId, enabled, eventTime, eventType } = event;
 
 	// Find the stopwatch in the local stopwatches array
 	const stopwatchIndex = stopwatches.findIndex(stopwatch => stopwatch.id === stopwatchId);
 	if (stopwatchIndex !== -1) {
 		// Find the event in the stopwatch's journal based on time and type
-		const eventIndex = stopwatches[stopwatchIndex].journal.findIndex(journalEvent => journalEvent.time === time && journalEvent.type === type);
+		const eventIndex = stopwatches[stopwatchIndex].journal.findIndex(journalEvent => journalEvent.time === eventTime && journalEvent.type === eventType);
 		if (eventIndex !== -1) {
 			// Update the enabled status of the event
 			stopwatches[stopwatchIndex].journal[eventIndex].enabled = enabled;
