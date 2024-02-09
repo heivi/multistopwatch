@@ -1,3 +1,5 @@
 .DS_Store
 eventJournal.json
+eventJournals.json
 node_modules/
+.vscode/

@@ -19,23 +19,56 @@ if (!clientId) {
 	clientId = generateUniqueId();
 	localStorage.setItem('clientId', clientId);
 }
-let stopwatches = [];
+let stopwatches = { 'default': [] };
+let userName = "";
 
 $('#userName').on('change', (e) => {
 	console.log(e);
-	localStorage.setItem('clientId', e.target.value);
-	clientId = e.target.value.trim();
+	localStorage.setItem('userName', e.target.value.trim());
+	userName = e.target.value.trim();
 });
 
 // Set the user's name in the input field
-$('#userName').val(clientId);
+$('#userName').val(userName);
+
+let sessionId = "default";
+
+$('#sessionId').on('change', (e) => {
+	let newId = e.target.value.trim()
+	if (newId == sessionId) return;
+
+	// clear screen
+	$(".stopwatches-container").empty();
+
+	console.log(e);
+	localStorage.setItem('sessionId', newId);
+	sessionId = newId;
+
+	// Render local stopwatches
+	(stopwatches[sessionId] || []).forEach(stopwatch => {
+		// Check if the stopwatch is already rendered
+		if (!$(`#stopwatch-${stopwatch.id}`).length) {
+			renderStopwatch(stopwatch);
+			renderStopwatchTime(stopwatch.id);
+		}
+	});
+
+	// send sessionId message to update
+	socket.emit("sessionId", { sessionId, userName });
+});
+
+// Set the user's name in the input field
+$('#sessionId').val(sessionId);
+
+// send sessionId message to update
+socket.emit("sessionId", { sessionId, userName });
 
 // Load stopwatches from localStorage
 const storedStopwatches = JSON.parse(localStorage.getItem('stopwatches'));
 if (storedStopwatches) {
 	stopwatches = storedStopwatches;
 	// Render loaded stopwatches
-	stopwatches.forEach(stopwatch => {
+	(stopwatches[sessionId] || []).forEach(stopwatch => {
 		// Check if the stopwatch is already rendered
 		if (!$(`#stopwatch-${stopwatch.id}`).length) {
 			renderStopwatch(stopwatch);
@@ -44,9 +77,24 @@ if (storedStopwatches) {
 	});
 }
 
-setInterval(() => {
+function oncePerSecondAnim(callback) {
+	var frameFunc = function () {
+		// get the current time rounded down to a whole second (with a 10% margin)
+		var now = 100 * Math.floor(Date.now() / 100 + 0.1);
+		// run the callback
+		callback(now);
+		// wait for the next whole second
+		setTimeout(timerFunc, now + 100 - Date.now());
+	}, timerFunc = function () {
+		requestAnimationFrame(frameFunc);
+	};
+	timerFunc();
+}
+
+// Update times on roughly even times
+oncePerSecondAnim(function (now) {
 	updateStopwatches();
-}, 100);
+});
 
 // Function to render deleted stopwatches list
 function renderDeletedStopwatches() {
@@ -58,9 +106,10 @@ function renderDeletedStopwatches() {
 		container.append('<h3>Deleted Stopwatches</h3>');
 		deletedStopwatches.forEach(stopwatch => {
 			const source = stopwatch.source || "local"; // Default source is "local"
+			const session = stopwatch.sessionId || "default"; // Default session is "default"
 			const stopwatchHtml = `
                 <div>
-                    <span>${stopwatch.name} (${source})</span>
+                    <span>${session} - ${stopwatch.name} (${source})</span>
                     <button class="btn btn-success recover-btn" data-id="${stopwatch.id}"><i class="fa-solid fa-recycle"></i></button>
                 </div>
             `;
@@ -92,14 +141,16 @@ $(document).on('click', '.recover-btn', function () {
 
 		recoveredStopwatch.journal.sort((a, b) => a.time - b.time);
 
-		const existingStopwatchIndex = stopwatches.findIndex(stopwatch => stopwatch.id === stopwatchId);
+		const existingStopwatchIndex = (stopwatches[sessionId] || []).findIndex(stopwatch => stopwatch.id === stopwatchId);
 		if (existingStopwatchIndex !== -1) {
+			stopwatches[sessionId][existingStopwatchIndex].journal.sort((a, b) => a.time - b.time);
 			// Merge the recovered stopwatch's journal with the existing one
-			stopwatches[existingStopwatchIndex].journal = mergeSortedJournals(stopwatches[existingStopwatchIndex].journal, recoveredStopwatch.journal);
+			stopwatches[sessionId][existingStopwatchIndex].journal = mergeSortedJournals(stopwatches[sessionId][existingStopwatchIndex].journal, recoveredStopwatch.journal);
 			renderStopwatchTime(stopwatchId);
 		} else {
 			// Add the recovered stopwatch to stopwatches array
-			stopwatches.push(recoveredStopwatch);
+			if (typeof (stopwatches[sessionId]) === 'undefined') stopwatches[sessionId] = [];
+			stopwatches[sessionId].push(recoveredStopwatch);
 			renderStopwatch(recoveredStopwatch);
 		}
 
@@ -107,14 +158,16 @@ $(document).on('click', '.recover-btn', function () {
 
 		// Iterate through the recovered stopwatch's journal and emit each event to the server
 		recoveredStopwatch.journal.forEach(event => {
-			socket.emit(event.type, { stopwatchId, type: event.type, time: event.time, clientId, enabled: event.enabled, ...(event.type == 'add' && event.name && { name: event.name }) });
+			socket.emit(event.type, { ...event, clientId, sessionId, userName });
 		});
+
+		// send recover message
+		socket.emit("msg", { stopwatchId, type: "recover", clientId, sessionId, userName, time: new Date(ts.now()).getTime() });
 
 		// Update localStorage with the modified stopwatches array
 		updateLocalStopwatches();
 	}
 });
-
 
 // Handle click event for clearing deleted stopwatches
 $(document).on('click', '#clearDeletedBtn', function () {
@@ -127,7 +180,7 @@ function loadStopwatchesFromJournal(journal) {
 	const stopwatchMap = new Map();
 
 	journal.forEach(event => {
-		const { stopwatchId, time, type, enabled } = event;
+		const { stopwatchId, type } = event;
 		let stopwatch = stopwatchMap.get(stopwatchId);
 
 		if (!stopwatch) {
@@ -141,10 +194,10 @@ function loadStopwatchesFromJournal(journal) {
 		}
 
 		// Update the stopwatch state based on the event type
-		stopwatch.journal.push({ type, time, enabled, clientId: event.clientId, source: "syncJournal", ...(type == 'add' && { name: event.name }) });
+		stopwatch.journal.push({ ...event, source: "syncJournal" });
 
 		if (type == 'toggleEvent') {
-			//
+			// TODO: Toggle based on journal
 		}
 
 		if (type == 'add') {
@@ -161,17 +214,17 @@ function loadStopwatchesFromJournal(journal) {
 
 		if (type == 'remove') {
 			stopwatchMap.delete(stopwatchId);
-			const existingStopwatchIndex = stopwatches.findIndex(stopwatch => stopwatch.id === stopwatchId);
+			const existingStopwatchIndex = (stopwatches[sessionId] || []).findIndex(stopwatch => stopwatch.id === stopwatchId);
 			if (existingStopwatchIndex !== -1) {
 				const deletedStopwatches = JSON.parse(localStorage.getItem('deletedStopwatches')) || [];
 				const existingDeletedIndex = deletedStopwatches.findIndex(stopwatch => stopwatch.id === stopwatchId);
 				if (existingDeletedIndex === -1) {
-					stopwatches[existingStopwatchIndex].source = "reload";
+					stopwatches[sessionId][existingStopwatchIndex].source = "reload";
 					deletedStopwatches.push(stopwatches[existingStopwatchIndex]);
 					localStorage.setItem('deletedStopwatches', JSON.stringify(deletedStopwatches));
 				}
 				// remove local version
-				stopwatches.splice(existingStopwatchIndex, 1);
+				stopwatches[sessionId].splice(existingStopwatchIndex, 1);
 			}
 		}
 
@@ -193,17 +246,19 @@ socket.on('syncJournal', (journal) => {
 	// Load stopwatches from the event journal
 	const loadedStopwatches = loadStopwatchesFromJournal(journal);
 
+	if (typeof (stopwatches[sessionId]) === 'undefined') stopwatches[sessionId] = [];
+
 	// Merge loaded stopwatches with existing stopwatches
 	loadedStopwatches.forEach(loadedStopwatch => {
-		const existingStopwatchIndex = stopwatches.findIndex(stopwatch => stopwatch.id === loadedStopwatch.id);
+		const existingStopwatchIndex = stopwatches[sessionId].findIndex(stopwatch => stopwatch.id === loadedStopwatch.id);
 		if (existingStopwatchIndex !== -1) {
 			// Merge the journals of existing and loaded stopwatches
-			const existingStopwatch = stopwatches[existingStopwatchIndex];
-			console.log("Merge", JSON.parse(JSON.stringify(existingStopwatch.journal)), JSON.parse(JSON.stringify(loadedStopwatch.journal)));
+			const existingStopwatch = stopwatches[sessionId][existingStopwatchIndex];
+			//console.log("Merge", JSON.parse(JSON.stringify(existingStopwatch.journal)), JSON.parse(JSON.stringify(loadedStopwatch.journal)));
 			existingStopwatch.journal = mergeSortedJournals(existingStopwatch.journal, loadedStopwatch.journal);
-			console.log("Merged", existingStopwatch.journal);
+			//console.log("Merged", existingStopwatch.journal);
 		} else {
-			stopwatches.push(loadedStopwatch);
+			stopwatches[sessionId].push(loadedStopwatch);
 		}
 	});
 
@@ -211,7 +266,7 @@ socket.on('syncJournal', (journal) => {
 	localStorage.setItem('stopwatches', JSON.stringify(stopwatches));
 
 	// Render loaded stopwatches
-	stopwatches.forEach(stopwatch => {
+	stopwatches[sessionId].forEach(stopwatch => {
 		// Check if the stopwatch is already rendered
 		if (!$(`#stopwatch-${stopwatch.id}`).length) {
 			renderStopwatch(stopwatch);
@@ -228,114 +283,81 @@ function updateLocalStopwatches() {
 	localStorage.setItem('stopwatches', JSON.stringify(stopwatches));
 }
 
-// Listen for start event
-socket.on('start', (event) => {
-	const { stopwatchId, time, enabled } = event;
-	const stopwatch = stopwatches.find(stopwatch => stopwatch.id === stopwatchId);
-	if (stopwatch) {
-		stopwatch.journal.push({ type: 'start', time, enabled, clientId: event.clientId, source: "socketio" });
-		stopwatch.journal.sort((a, b) => a.time - b.time);
-		renderStopwatchTime(stopwatchId);
+// Listen for msg event
+socket.on('msg', (event) => {
+	const { stopwatchId, type } = event;
+	if (typeof (stopwatches[sessionId]) === 'undefined') stopwatches[sessionId] = [];
+
+	if (type == 'add') {
+		const existingStopwatchIndex = stopwatches[sessionId].findIndex(stopwatch => stopwatch.id === stopwatchId);
+		if (existingStopwatchIndex !== -1) {
+			// If stopwatch already exists, update its name and merge the journals
+			const existingStopwatch = stopwatches[sessionId][existingStopwatchIndex];
+			existingStopwatch.name = event.name;
+
+			// Merge the event to journal
+			existingStopwatch.journal.sort((a, b) => a.time - b.time);
+			existingStopwatch.journal = mergeSortedJournals(existingStopwatch.journal, [{ ...event, source: "socketio" }]);
+
+			// Render the stopwatch time on the UI
+			renderStopwatchTime(stopwatchId);
+		} else {
+			// Create a new stopwatch if it doesn't exist
+			const newStopwatch = {
+				id: stopwatchId,
+				name: event.name,
+				running: false,
+				journal: [{ ...event, source: "socketio" }]
+			};
+			stopwatches[sessionId].push(newStopwatch);
+			renderStopwatch(newStopwatch);
+		}
+		// Update localStorage with the modified stopwatches array
 		updateLocalStopwatches();
 		updateJournalList(stopwatchId, false);
-		updateLaps(stopwatchId, false);
-	}
-});
 
-// Listen for stop event
-socket.on('stop', (event) => {
-	const { stopwatchId, time, enabled } = event;
-	const stopwatch = stopwatches.find(stopwatch => stopwatch.id === stopwatchId);
-	if (stopwatch) {
-		stopwatch.journal.push({ type: 'stop', time, enabled, clientId: event.clientId, source: "socketio" });
-		stopwatch.journal.sort((a, b) => a.time - b.time);
-		renderStopwatchTime(stopwatchId);
-		updateLocalStopwatches();
-		updateJournalList(stopwatchId, false);
-		updateLaps(stopwatchId, false);
-	}
-});
+	} else if (type == "remove") {
+		// Add stopwatch to deleted, if found
+		const indexToRemove = stopwatches[sessionId].findIndex(stopwatch => stopwatch.id === stopwatchId);
+		if (indexToRemove !== -1) {
+			const deletedStopwatches = JSON.parse(localStorage.getItem('deletedStopwatches')) || [];
+			stopwatches[sessionId][indexToRemove].source = "remote";
+			deletedStopwatches.push(stopwatches[sessionId][indexToRemove]);
+			localStorage.setItem('deletedStopwatches', JSON.stringify(deletedStopwatches));
 
-// Listen for lap event
-socket.on('lap', (event) => {
-	const { stopwatchId, time, enabled } = event;
-	const stopwatch = stopwatches.find(stopwatch => stopwatch.id === stopwatchId);
-	if (stopwatch) {
-		stopwatch.journal.push({ type: 'lap', time, enabled, clientId: event.clientId, source: "socketio" });
-		stopwatch.journal.sort((a, b) => a.time - b.time);
-		renderStopwatchTime(stopwatchId);
-		updateLocalStopwatches();
-		updateLaps(stopwatchId, false);
-		updateJournalList(stopwatchId, false);
-	}
-});
+			stopwatches[sessionId].splice(indexToRemove, 1);
+			$(`#stopwatch-${stopwatchId}`).remove();
 
-// Listen for reset event
-socket.on('reset', (event) => {
-	const { stopwatchId, time, enabled } = event;
-	const stopwatch = stopwatches.find(stopwatch => stopwatch.id === stopwatchId);
-	if (stopwatch) {
-		stopwatch.journal.push({ type: 'reset', time, enabled, clientId: event.clientId, source: "socketio" });
-		stopwatch.journal.sort((a, b) => a.time - b.time);
-		renderStopwatchTime(stopwatchId);
-		updateLocalStopwatches();
-		updateJournalList(stopwatchId, false);
-		updateLaps(stopwatchId, false);
-	}
-});
+			updateLocalStopwatches();
+		}
+	} else if (type == "toggleEvent") {
+		// Find the stopwatch in the local stopwatches array
+		const stopwatchIndex = stopwatches[sessionId].findIndex(stopwatch => stopwatch.id === stopwatchId);
+		if (stopwatchIndex !== -1) {
+			// Find the event in the stopwatch's journal based on time and type
+			const eventIndex = stopwatches[sessionId][stopwatchIndex].journal.findIndex(journalEvent => journalEvent.time === event.eventTime && journalEvent.type === event.eventType);
+			if (eventIndex !== -1) {
+				// Update the enabled status of the event
+				stopwatches[sessionId][stopwatchIndex].journal[eventIndex].enabled = event.enabled;
 
-// Listen for add event
-socket.on('add', (event) => {
-	const { stopwatchId, name, time, enabled } = event;
-	const existingStopwatchIndex = stopwatches.findIndex(stopwatch => stopwatch.id === stopwatchId);
-	if (existingStopwatchIndex !== -1) {
-		// If stopwatch already exists, update its name and merge the journals
-		const existingStopwatch = stopwatches[existingStopwatchIndex];
-		existingStopwatch.name = name;
+				// Update local storage with the modified stopwatches array
+				updateLocalStopwatches();
 
-		// Create a new event object for the add event
-		const addEvent = { type: 'add', time, name, enabled, clientId: event.clientId, source: "socketio" };
-
-		// Sort the journals before merging
-		existingStopwatch.journal.push(addEvent);
-		existingStopwatch.journal.sort((a, b) => a.time - b.time);
-
-		// Render the stopwatch time on the UI
-		renderStopwatchTime(stopwatchId);
+				updateJournalList(stopwatchId, false);
+				updateLaps(stopwatchId, false);
+			}
+		}
 	} else {
-		// Create a new stopwatch if it doesn't exist
-		const newStopwatch = {
-			id: stopwatchId,
-			name: name,
-			running: false,
-			journal: [{ type: 'add', time: event.time, name, enabled: true, clientId: event.clientId, source: "socketio" }]
-		};
-		stopwatches.push(newStopwatch);
-		renderStopwatch(newStopwatch);
+		const stopwatch = stopwatches[sessionId].find(stopwatch => stopwatch.id === stopwatchId);
+		if (stopwatch) {
+			stopwatch.journal.push({ ...event, source: "socketio" });
+			stopwatch.journal.sort((a, b) => a.time - b.time);
+			renderStopwatchTime(stopwatchId);
+			updateLocalStopwatches();
+			updateJournalList(stopwatchId, false);
+			updateLaps(stopwatchId, false);
+		}
 	}
-
-	// Update localStorage with the modified stopwatches array
-	updateLocalStopwatches();
-	updateJournalList(stopwatchId, false);
-});
-
-
-// Listen for remove event
-socket.on('remove', (event) => {
-	const { stopwatchId } = event;
-	const indexToRemove = stopwatches.findIndex(stopwatch => stopwatch.id === stopwatchId);
-	if (indexToRemove !== -1) {
-		const deletedStopwatches = JSON.parse(localStorage.getItem('deletedStopwatches')) || [];
-		stopwatches[indexToRemove].source = "remote";
-		deletedStopwatches.push(stopwatches[indexToRemove]);
-		localStorage.setItem('deletedStopwatches', JSON.stringify(deletedStopwatches));
-
-		stopwatches.splice(indexToRemove, 1);
-		$(`#stopwatch-${stopwatchId}`).remove();
-
-		updateLocalStopwatches();
-	}
-
 });
 
 // Separate stopwatch HTML rendering function
@@ -369,10 +391,10 @@ $(document).on('click', '.lap-times-btn', function () {
 });
 
 function updateLaps(stopwatchId, toggle) {
-	const stopwatch = stopwatches.find(stopwatch => stopwatch.id === stopwatchId);
+	const stopwatch = (stopwatches[sessionId] || []).find(stopwatch => stopwatch.id === stopwatchId);
 	if (stopwatch) {
 		const lapTimesContainer = document.getElementById(`lap-times-container-${stopwatchId}`);
-		console.log(lapTimesContainer, `#lap-times-container-${stopwatchId}`);
+		//console.log(lapTimesContainer, `#lap-times-container-${stopwatchId}`);
 
 		const lapTimes = calculateLapTimes(stopwatch.journal);
 		stopwatch.lapTimes = lapTimes;
@@ -383,7 +405,7 @@ function updateLaps(stopwatchId, toggle) {
 		for (let i = 0; i < stopwatch.lapTimes.length; i++) {
 			const lapTime = stopwatch.lapTimes[i];
 			cumulativeElapsedTime += lapTime; // Add lap time to cumulative elapsed time
-			lapItems += `<p>Lap ${i + 1}: ${formatTime(lapTime)} - ${formatTime(cumulativeElapsedTime)}</p>`;
+			lapItems += `<p>Lap ${i + 1}: ${formatTime(lapTime, "milliseconds")} - ${formatTime(cumulativeElapsedTime, "milliseconds")}</p>`;
 		}
 		lapTimesContainer.innerHTML = lapItems;
 
@@ -392,7 +414,6 @@ function updateLaps(stopwatchId, toggle) {
 	}
 }
 
-
 // Handle click event for showing the journal list
 $(document).on('click', '.journal-btn', function () {
 	const stopwatchId = $(this).data('id');
@@ -400,10 +421,10 @@ $(document).on('click', '.journal-btn', function () {
 });
 
 function updateJournalList(stopwatchId, toggle) {
-	const stopwatch = stopwatches.find(stopwatch => stopwatch.id === stopwatchId);
+	const stopwatch = (stopwatches[sessionId] || []).find(stopwatch => stopwatch.id === stopwatchId);
 	if (stopwatch) {
 		const journalList = document.getElementById(`journal-list-${stopwatchId}`);
-		console.log(journalList);
+		//console.log(journalList);
 
 		let items = "";
 		stopwatch.journal.forEach((event, index) => {
@@ -422,54 +443,38 @@ $(document).on('change', '.journal-list li', function () {
 	const toggleTime = new Date(ts.now()).getTime();
 	const stopwatchId = $(this).closest('ul').data('id');
 	const index = $(this).data('index');
-	const stopwatch = stopwatches.find(stopwatch => stopwatch.id === stopwatchId);
+	const stopwatch = (stopwatches[sessionId] || []).find(stopwatch => stopwatch.id === stopwatchId);
 	if (stopwatch && stopwatch.journal[index]) {
 		stopwatch.journal[index].enabled = !stopwatch.journal[index].enabled;
-		console.log("Journal toggle", stopwatch.journal[index]);
+		//console.log("Journal toggle", stopwatch.journal[index]);
 		updateLocalStopwatches();
 		updateLaps(stopwatchId, false);
 		// Emit event to server to synchronize status
-		socket.emit('toggleEvent', { stopwatchId, time: toggleTime, type: 'toggleEvent', eventTime: stopwatch.journal[index].time, eventType: stopwatch.journal[index].type, enabled: stopwatch.journal[index].enabled, clientId });
+		socket.emit('msg', { stopwatchId, sessionId, time: toggleTime, type: 'toggleEvent', eventTime: stopwatch.journal[index].time, eventType: stopwatch.journal[index].type, enabled: stopwatch.journal[index].enabled, clientId, userName });
 	}
 });
-
-// Listen for toggleEvent from the server to sync journal toggles
-socket.on('toggleEvent', (event) => {
-	const { type, stopwatchId, time, clientId, enabled, eventTime, eventType } = event;
-
-	// Find the stopwatch in the local stopwatches array
-	const stopwatchIndex = stopwatches.findIndex(stopwatch => stopwatch.id === stopwatchId);
-	if (stopwatchIndex !== -1) {
-		// Find the event in the stopwatch's journal based on time and type
-		const eventIndex = stopwatches[stopwatchIndex].journal.findIndex(journalEvent => journalEvent.time === eventTime && journalEvent.type === eventType);
-		if (eventIndex !== -1) {
-			// Update the enabled status of the event
-			stopwatches[stopwatchIndex].journal[eventIndex].enabled = enabled;
-			console.log("Toggle event", stopwatches[stopwatchIndex].journal[eventIndex]);
-
-			// Perform UI update here if needed
-			// For example, if you want to visually indicate the enabled/disabled status of the event in the UI
-
-			// Update local storage with the modified stopwatches array
-			updateLocalStopwatches();
-			updateJournalList(stopwatchId, false);
-			updateLaps(stopwatchId, false);
-		}
-	}
-});
-
 
 // Handle a button click event and emit a start event
 $(document).on('click', '.start-btn', function () {
 	const startTime = new Date(ts.now());
 	const stopwatchId = $(this).data('id');
-	const stopwatchIndex = stopwatches.findIndex(stopwatch => stopwatch.id === stopwatchId);
+	const stopwatchIndex = (stopwatches[sessionId] || []).findIndex(stopwatch => stopwatch.id === stopwatchId);
 	if (stopwatchIndex !== -1) {
-		const stopwatch = stopwatches[stopwatchIndex];
-		stopwatch.journal.push({ type: 'start', time: startTime.getTime(), enabled: true, clientId, source: "local" });
+		const stopwatch = stopwatches[sessionId][stopwatchIndex];
+		let event = {
+			stopwatchId,
+			type: 'start',
+			sessionId,
+			time: startTime.getTime(),
+			enabled: true,
+			clientId,
+			userName,
+			source: 'local',
+		};
+		stopwatch.journal.push(event);
 
 		// Emit the start event with stopwatch data
-		socket.emit('start', { stopwatchId, time: startTime.getTime(), clientId, enabled: true });
+		socket.emit('msg', event);
 		updateLocalStopwatches();
 		updateJournalList(stopwatchId, false);
 	}
@@ -479,13 +484,23 @@ $(document).on('click', '.start-btn', function () {
 $(document).on('click', '.stop-btn', function () {
 	const stopTime = new Date(ts.now());
 	const stopwatchId = $(this).data('id');
-	const stopwatchIndex = stopwatches.findIndex(stopwatch => stopwatch.id === stopwatchId);
+	const stopwatchIndex = (stopwatches[sessionId] || []).findIndex(stopwatch => stopwatch.id === stopwatchId);
 	if (stopwatchIndex !== -1) {
-		const stopwatch = stopwatches[stopwatchIndex];
-		stopwatch.journal.push({ type: 'stop', time: stopTime.getTime(), enabled: true, clientId, source: "local" });
+		const stopwatch = stopwatches[sessionId][stopwatchIndex];
+		let event = {
+			stopwatchId,
+			type: 'stop',
+			sessionId,
+			time: stopTime.getTime(),
+			enabled: true,
+			clientId,
+			userName,
+			source: 'local',
+		};
+		stopwatch.journal.push(event);
 
 		// Emit the stop event with stopwatch data
-		socket.emit('stop', { stopwatchId, time: stopTime.getTime(), clientId, enabled: true });
+		socket.emit('msg', event);
 
 		// Update the stopwatch time on the UI
 		renderStopwatchTime(stopwatchId);
@@ -498,13 +513,23 @@ $(document).on('click', '.stop-btn', function () {
 $(document).on('click', '.lap-btn', function () {
 	const lapTime = new Date(ts.now());
 	const stopwatchId = $(this).data('id');
-	const stopwatchIndex = stopwatches.findIndex(stopwatch => stopwatch.id === stopwatchId);
+	const stopwatchIndex = (stopwatches[sessionId] || []).findIndex(stopwatch => stopwatch.id === stopwatchId);
 	if (stopwatchIndex !== -1) {
-		const stopwatch = stopwatches[stopwatchIndex];
-		stopwatch.journal.push({ type: 'lap', time: lapTime.getTime(), enabled: true, clientId, source: "local" });
+		const stopwatch = stopwatches[sessionId][stopwatchIndex];
+		let event = {
+			stopwatchId,
+			type: 'lap',
+			sessionId,
+			time: lapTime.getTime(),
+			enabled: true,
+			clientId,
+			userName,
+			source: 'local',
+		};
+		stopwatch.journal.push(event);
 
 		// Emit the lap event with stopwatch data
-		socket.emit('lap', { stopwatchId, time: lapTime.getTime(), clientId, enabled: true });
+		socket.emit('msg', event);
 		updateLocalStopwatches();
 		updateLaps(stopwatchId, false);
 		updateJournalList(stopwatchId, false);
@@ -515,18 +540,29 @@ $(document).on('click', '.lap-btn', function () {
 $(document).on('click', '.remove-btn', function () {
 	const removeTime = new Date(ts.now());
 	const stopwatchId = $(this).data('id');
-	const indexToRemove = stopwatches.findIndex(stopwatch => stopwatch.id === stopwatchId);
+	const indexToRemove = (stopwatches[sessionId] || []).findIndex(stopwatch => stopwatch.id === stopwatchId);
 	if (indexToRemove !== -1) {
 		const deletedStopwatches = JSON.parse(localStorage.getItem('deletedStopwatches')) || [];
-		stopwatches[indexToRemove].source = "local";
-		deletedStopwatches.push(stopwatches[indexToRemove]);
+		stopwatches[sessionId][indexToRemove].source = "local";
+		deletedStopwatches.push(stopwatches[sessionId][indexToRemove]);
 		localStorage.setItem('deletedStopwatches', JSON.stringify(deletedStopwatches));
 
-		stopwatches.splice(indexToRemove, 1);
+		stopwatches[sessionId].splice(indexToRemove, 1);
 		$(`#stopwatch-${stopwatchId}`).remove();
 
+		let event = {
+			stopwatchId,
+			type: 'remove',
+			sessionId,
+			time: removeTime.getTime(),
+			enabled: true,
+			clientId,
+			userName,
+			source: 'local',
+		};
+
 		// Emit remove event with stopwatchId
-		socket.emit('remove', { stopwatchId, clientId, time: removeTime.getTime(), enabled: true });
+		socket.emit('msg', event);
 
 		updateLocalStopwatches();
 		updateJournalList(stopwatchId, false);
@@ -539,20 +575,33 @@ $('#addStopwatchBtn').on('click', function () {
 	const stopwatchName = $('#stopwatchName').val().trim();
 	if (stopwatchName) {
 		const stopwatchId = generateUniqueId(); // Generate a unique ID for the stopwatch
+		let event = {
+			stopwatchId,
+			type: 'add',
+			time: addTime,
+			sessionId,
+			name: stopwatchName,
+			enabled: true,
+			clientId,
+			userName,
+			source: "local",
+		};
+
 		const newStopwatch = {
 			id: stopwatchId,
 			name: stopwatchName,
 			running: false,
-			journal: [{ type: 'add', time: addTime, name: stopwatchName, enabled: true, clientId, source: "local" }]
+			journal: [event]
 		};
-		stopwatches.push(newStopwatch);
+		if (typeof (stopwatches[sessionId]) === 'undefined') stopwatches[sessionId] = [];
+		stopwatches[sessionId].push(newStopwatch);
 		renderStopwatch(newStopwatch);
 
 		// Update localStorage with new stopwatch
 		localStorage.setItem('stopwatches', JSON.stringify(stopwatches));
 
 		// Emit add event with stopwatch data
-		socket.emit('add', { stopwatchId: stopwatchId, name: stopwatchName, clientId, time: addTime, enabled: true });
+		socket.emit('msg', event);
 		updateJournalList(stopwatchId, false);
 	}
 });
@@ -561,13 +610,23 @@ $('#addStopwatchBtn').on('click', function () {
 $(document).on('click', '.reset-btn', function () {
 	const resetTime = new Date(ts.now());
 	const stopwatchId = $(this).data('id');
-	const stopwatchIndex = stopwatches.findIndex(stopwatch => stopwatch.id === stopwatchId);
+	const stopwatchIndex = (stopwatches[sessionId] || []).findIndex(stopwatch => stopwatch.id === stopwatchId);
 	if (stopwatchIndex !== -1) {
-		const stopwatch = stopwatches[stopwatchIndex];
-		stopwatch.journal.push({ type: 'reset', time: resetTime.getTime(), enabled: true, clientId, source: "local" });
+		const stopwatch = stopwatches[sessionId][stopwatchIndex];
+		let event = {
+			stopwatchId,
+			type: 'reset',
+			sessionId,
+			time: resetTime.getTime(),
+			enabled: true,
+			clientId,
+			userName,
+			source: 'local',
+		};
+		stopwatch.journal.push(event);
 
 		// Emit the reset event with stopwatch data
-		socket.emit('reset', { stopwatchId, time: resetTime.getTime(), clientId, enabled: true });
+		socket.emit('msg', event);
 
 		// Update the stopwatch time on the UI
 		renderStopwatchTime(stopwatchId);
@@ -576,7 +635,8 @@ $(document).on('click', '.reset-btn', function () {
 	}
 });
 
-// Handle a button click event to manually sync time
+// TODO: Handle a button click event to manually sync time
+/*
 $('#syncTimeBtn').on('click', function () {
 	const offset = parseInt($('#timeOffset').val(), 10) || 0;
 	ts = timesync.create({
@@ -585,13 +645,13 @@ $('#syncTimeBtn').on('click', function () {
 		},
 	});
 });
+*/
 
 // Function to render the stopwatch time for a specific stopwatch
 function renderStopwatchTime(stopwatchId) {
-	const stopwatch = stopwatches.find(stopwatch => stopwatch.id === stopwatchId);
+	const stopwatch = (stopwatches[sessionId] || []).find(stopwatch => stopwatch.id === stopwatchId);
 	if (stopwatch) {
 		const stopwatchContainer = $(`#stopwatch-${stopwatchId}`);
-
 		stopwatchContainer.find('.stopwatch-time').text(formatTime(getStopwatchElapsedTime(stopwatch)));
 	}
 }
@@ -604,22 +664,25 @@ function calculateLapTimes(journal) {
 	let running = false;
 
 	journal.forEach(event => {
-		if (event.type === 'start' && event.enabled) {
+		if (!event.enabled) return;
+
+		if (event.type === 'start') {
 			lastStartTime = event.time;
 			lastLapTime = event.time;
 			running = true;
-		} else if (event.type === 'lap' && event.enabled && running) {
+		} else if (event.type === 'lap' && running) {
 			if (lastStartTime !== null) {
 				const lapTime = event.time - lastLapTime;
 				lapTimes.push(lapTime);
 				lastLapTime = event.time;
 			}
-		} else if (event.type === 'stop' && event.enabled) {
+		} else if (event.type === 'stop') {
+			// TODO: don't create a lap time from stop, except the last one
 			if (lastStartTime !== null) {
 				lapTimes.push(event.time - lastLapTime);
 				running = false;
 			}
-		} else if (event.type === 'reset' && event.enabled) {
+		} else if (event.type === 'reset') {
 			lastStartTime = null;
 			lastLapTime = null;
 			lapTimes.length = 0;
@@ -637,6 +700,7 @@ function getStopwatchElapsedTime(stopwatch) {
 	let running = false;
 	let lastStartTime = null;
 
+	// TODO: make calculation lighter by storing intermediate elapsed time to the last stop
 	stopwatch.journal.forEach((event, index) => {
 		if (event.enabled) {
 			if (event.type === 'start' && !running) {
@@ -663,17 +727,28 @@ function getStopwatchElapsedTime(stopwatch) {
 }
 
 
-function formatTime(milliseconds) {
+function formatTime(milliseconds, format = "tenths") {
 	const totalSeconds = Math.floor(milliseconds / 1000);
 	const hours = Math.floor(totalSeconds / 3600);
 	const minutes = Math.floor((totalSeconds % 3600) / 60);
 	const seconds = totalSeconds % 60;
-	const millisecondsPart = Math.floor(milliseconds % 1000);
+	const tenthPart = Math.floor(milliseconds / 100) % 10;
+	const millisecondsPart = Math.floor(milliseconds) % 1000;
 
-	if (hours > 0) {
-		return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(millisecondsPart).padStart(3, '0')}`;
+	if (format == "milliseconds") {
+		if (hours > 0) {
+			return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(millisecondsPart).padStart(3, '0')}`;
+		} else {
+			return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(millisecondsPart).padStart(3, '0')}`;
+		}
 	} else {
-		return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(millisecondsPart).padStart(3, '0')}`;
+
+
+		if (hours > 0) {
+			return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(tenthPart).padStart(1, '0')}`;
+		} else {
+			return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(tenthPart).padStart(1, '0')}`;
+		}
 	}
 }
 
@@ -684,20 +759,20 @@ function generateUniqueId() {
 }
 
 // Initial rendering of stopwatches
-stopwatches.forEach(stopwatch => {
+(stopwatches[sessionId] || []).forEach(stopwatch => {
 	renderStopwatchTime(stopwatch.id);
 });
 
 // Function to update the stopwatch time for all stopwatches
 function updateStopwatchTimes() {
-	stopwatches.forEach(stopwatch => {
+	(stopwatches[sessionId] || []).forEach(stopwatch => {
 		renderStopwatchTime(stopwatch.id);
 	});
 }
 
 // Function to update stopwatches based on events in the journal
 function updateStopwatches() {
-	stopwatches.forEach(stopwatch => {
+	(stopwatches[sessionId] || []).forEach(stopwatch => {
 		renderStopwatchTime(stopwatch.id);
 	});
 }

@@ -1,3 +1,4 @@
+// server.js
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -18,8 +19,8 @@ app.use(express.static('public'));
 
 const port = process.env.PORT || 3000;
 
-let eventJournal = loadEventJournal(); // Load events from local storage
-let stopwatches = [];
+let eventJournals = loadEventJournals(); // Load event journals from disk
+let changedSince = false;
 
 server.listen(port, () => {
 	console.log(`Server running on port ${port}`);
@@ -29,179 +30,66 @@ app.use('/timesync', timesyncServer.requestHandler); // Add timesync endpoint
 
 io.on('connection', (socket) => {
 	console.log('Client connected:', socket.id);
+	socket.data.sessionId = "default";
+	socket.data.userName = "anonymous";
+	socket.join(socket.data.sessionId);
 
-	// Send existing event journal to the client
-	socket.emit('syncJournal', eventJournal);
+	// Handle session ID message from the client
+	socket.on('sessionId', (data) => {
+		socket.data.sessionId = data.sessionId;
+		socket.data.userName = data.userName;
 
-	// Handle start event
-	socket.on('start', (data) => {
-		const stopwatchId = data.stopwatchId;
-		const event = {
-			id: generateEventId(),
-			type: 'start',
-			stopwatchId: stopwatchId,
-			time: data.time,
-			clientId: data.clientId,
-			enabled: data.enabled,
-		};
-
-		socket.broadcast.emit('start', event);
-
-		eventJournal.push(event);
-		saveEventJournal(eventJournal);
-	});
-
-	// Handle stop event
-	socket.on('stop', (data) => {
-		const stopwatchId = data.stopwatchId;
-		const event = {
-			id: generateEventId(),
-			type: 'stop',
-			stopwatchId: stopwatchId,
-			time: data.time,
-			clientId: data.clientId,
-			enabled: data.enabled,
-		};
-
-		socket.broadcast.emit('stop', event);
-
-		eventJournal.push(event);
-		saveEventJournal(eventJournal);
-	});
-
-	// Handle lap event
-	socket.on('lap', (data) => {
-		const stopwatchId = data.stopwatchId;
-		const event = {
-			id: generateEventId(),
-			type: 'lap',
-			stopwatchId: stopwatchId,
-			time: data.time,
-			clientId: data.clientId,
-			enabled: data.enabled,
-		};
-
-		socket.broadcast.emit('lap', event);
-
-		eventJournal.push(event);
-		saveEventJournal(eventJournal);
-	});
-
-	// Handle remove event
-	socket.on('remove', (data) => {
-		const event = {
-			id: generateEventId(),
-			type: 'remove',
-			stopwatchId: data.stopwatchId,
-			time: data.time,
-			clientId: data.clientId,
-			enabled: data.enabled,
+		// Create a new event journal for the session if it doesn't exist
+		if (!eventJournals[socket.data.sessionId]) {
+			eventJournals[socket.data.sessionId] = [];
+			changedSince = true;
 		}
+		// Send existing event journal to the client for the session
+		socket.emit('syncJournal', eventJournals[socket.data.sessionId]);
+	});
 
-		socket.broadcast.emit('remove', event);
-
-		eventJournal.push(event);
-		saveEventJournal(eventJournal);
-
-		stopwatches = stopwatches.filter((e => e !== data.stopwatchId));
-
-		// Check if all stopwatches are removed and clean the journal if so
-		if (stopwatches.length === 0) {
-			cleanJournal();
+	// Handle msg event
+	socket.on('msg', (data) => {
+		if (data.sessionId != socket.data.sessionId) {
+			socket.data.sessionId = data.sessionId;
 		}
+		// Push event to the event journal for the corresponding session
+		eventJournals[data.sessionId].push(data);
+		changedSince = true;
+		// Broadcast the event to other clients in the same session
+		socket.to(socket.data.sessionId).emit('msg', data);
 	});
-
-	// Handle add event
-	socket.on('add', (data) => {
-		//console.log(data);
-		const event = {
-			id: generateEventId(),
-			type: 'add',
-			stopwatchId: data.stopwatchId,
-			time: data.time,
-			name: data.name,
-			clientId: data.clientId,
-			enabled: data.enabled,
-		}
-
-		socket.broadcast.emit('add', event);
-
-		eventJournal.push(event);
-		saveEventJournal(eventJournal);
-		stopwatches.push(data.stopwatchId);
-	});
-
-	// Handle lap event
-	socket.on('reset', (data) => {
-		const event = {
-			id: generateEventId(),
-			type: 'reset',
-			stopwatchId: data.stopwatchId,
-			time: data.time,
-			clientId: data.clientId,
-			enabled: data.enabled,
-		};
-
-		socket.broadcast.emit('reset', event);
-
-		eventJournal.push(event);
-		saveEventJournal(eventJournal);
-	});
-
-	// Handle lap event
-	socket.on('toggleEvent', (data) => {
-		const event = {
-			id: generateEventId(),
-			type: data.type,
-			stopwatchId: data.stopwatchId,
-			time: data.time,
-			clientId: data.clientId,
-			enabled: data.enabled,
-			eventTime: data.eventTime,
-			eventType: data.eventType,
-		};
-
-		socket.broadcast.emit('toggleEvent', event);
-
-		eventJournal.push(event);
-		saveEventJournal(eventJournal);
-	});
-
 
 	// Handle disconnect event
 	socket.on('disconnect', () => {
-		console.log('Client disconnected:', socket.id);
+		console.log('Client disconnected:', socket.id, socket.data.sessionId, socket.data.userName);
 	});
+
 });
 
-// Function to generate a unique event ID
-function generateEventId() {
-	return Date.now().toString(36) + Math.random().toString(36).slice(2);
-}
-
 // Function to load events from local storage
-function loadEventJournal() {
+function loadEventJournals() {
 	try {
-		const data = fs.readFileSync('eventJournal.json', 'utf8');
-		return JSON.parse(data) || [];
+		const data = fs.readFileSync('eventJournals.json', 'utf8');
+		return JSON.parse(data) || {};
 	} catch (error) {
 		console.error('Error loading event journal:', error.message);
-		return [];
+		return {};
 	}
 }
 
-// Function to save events to local storage
-function saveEventJournal(events) {
+function saveEventJournals() {
+	if (changedSince);
 	try {
-		fs.writeFileSync('eventJournal.json', JSON.stringify(events));
+		fs.writeFileSync('eventJournals.json', JSON.stringify(eventJournals));
+		console.log('Event journals saved to disk.');
+		changedSince = false;
 	} catch (error) {
-		console.error('Error saving event journal:', error.message);
+		console.error('Error saving event journals:', error.message);
 	}
 }
 
-// Function to clean the journal
-function cleanJournal() {
-	eventJournal = [];
-	saveEventJournal(eventJournal);
-	console.log('Journal cleaned');
-}
+const saveInterval = 60000; // Save interval in milliseconds (e.g., every minute)
+
+// Start saving event journals to disk at regular intervals
+setInterval(saveEventJournals, saveInterval);
