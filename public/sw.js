@@ -1,19 +1,22 @@
+// Version 0.2
 // Files to cache
-const cacheName = 'multistop-v0.1';
+const cacheName = 'multistop-v0.2';
 const appShellFiles = [
   '/',
   '/app.js',
+  '/autocomplete.min.js',
+  '/favicon.ico',
   '/index.html',
   '/stopwatch.css',
   '/fontawesome/free/css/solid.css',
   '/fontawesome/free/css/fontawesome.css',
   '/fontawesome/free/webfonts/fa-solid-900.ttf',
   '/fontawesome/free/webfonts/fa-solid-900.woff2',
-  'https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css',
+  'https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css',
   'https://code.jquery.com/jquery-3.7.1.slim.min.js',
   'https://cdn.socket.io/4.7.4/socket.io.min.js',
   'https://cdn.jsdelivr.net/npm/timesync',
-  'https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js',
+  'https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js',
 ];
 
 // Installing Service Worker
@@ -21,24 +24,11 @@ self.addEventListener('install', (e) => {
   console.log('[Service Worker] Install');
   e.waitUntil((async () => {
     const cache = await caches.open(cacheName);
-    /*
-      .then(function (cache) {
-        console.log('[Service Worker] Caching all: app shell and content');
-        // Magic is here. Look the  mode: 'no-cors' part.
 
-        
+    const cacheBypassRequests = appShellFiles.map(
+      (url) => new Request(url, {cache: 'reload'}));
 
-        cache.addAll(appShellFiles.map(function (urlToPrefetch) {
-          console.log(urlToPrefetch);
-          return new Request(urlToPrefetch, { mode: 'no-cors' });
-        })).then(function () {
-          console.log('All resources have been fetched and cached.');
-        });
-      })
-
-      */
-
-    for (let i of appShellFiles) {
+    for (let i of cacheBypassRequests) {
       try {
         ok = await cache.add(i);
       } catch (err) {
@@ -54,7 +44,8 @@ self.addEventListener('fetch', (e) => {
   // Cache http and https only, skip unsupported chrome-extension:// and file://...
   if (e.request.method !== "GET" || !(
     e.request.url.startsWith('http:') || e.request.url.startsWith('https:')
-  ) || e.request.url.includes("timesync")) {
+  ) || e.request.url.includes("timesync") || e.request.url.includes("socket.io")
+  || e.request.url.includes("manifest")) {
     return;
   }
 

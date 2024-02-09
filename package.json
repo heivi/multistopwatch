@@ -1,4 +1,9 @@
 {
+  "name": "multi-stopwatch-server",
+  "version": "0.0.2",
+  "author": "Heikki Virekunnas <heikki@virekunnas.fi>",
+  "homepage": "https://github.com/heivi/multistopwatch",
+  "license": "MIT",
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.18.2",

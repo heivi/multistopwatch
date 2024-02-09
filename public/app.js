@@ -1,5 +1,7 @@
 // app.js
 
+import { default as Autocomplete } from "./autocomplete.min.js";
+
 if ("serviceWorker" in navigator) {
 	navigator.serviceWorker.register("./sw.js");
 }
@@ -20,10 +22,9 @@ if (!clientId) {
 	localStorage.setItem('clientId', clientId);
 }
 let stopwatches = { 'default': [] };
-let userName = "";
+let userName = localStorage.getItem('userName') || "";
 
 $('#userName').on('change', (e) => {
-	console.log(e);
 	localStorage.setItem('userName', e.target.value.trim());
 	userName = e.target.value.trim();
 });
@@ -31,16 +32,15 @@ $('#userName').on('change', (e) => {
 // Set the user's name in the input field
 $('#userName').val(userName);
 
-let sessionId = "default";
+let sessionId = localStorage.getItem('sessionId') || "default";
 
 $('#sessionId').on('change', (e) => {
 	let newId = e.target.value.trim()
 	if (newId == sessionId) return;
 
 	// clear screen
-	$(".stopwatches-container").empty();
+	$("#stopwatches-container").empty();
 
-	console.log(e);
 	localStorage.setItem('sessionId', newId);
 	sessionId = newId;
 
@@ -60,8 +60,15 @@ $('#sessionId').on('change', (e) => {
 // Set the user's name in the input field
 $('#sessionId').val(sessionId);
 
-// send sessionId message to update
-socket.emit("sessionId", { sessionId, userName });
+socket.on('connect', () => {
+	// send sessionId message to update
+	socket.emit("sessionId", { sessionId, userName });
+});
+
+socket.on('reconnect', () => {
+	// send sessionId message to update
+	socket.emit("sessionId", { sessionId, userName });
+});
 
 // Load stopwatches from localStorage
 const storedStopwatches = JSON.parse(localStorage.getItem('stopwatches'));
@@ -76,6 +83,16 @@ if (storedStopwatches) {
 		}
 	});
 }
+
+Autocomplete.init("#sessionId", {
+	items: Object.keys(stopwatches).filter((session) => stopwatches[session].length > 0),
+	suggestionThreshold: 1,
+	maximumItems: 10,
+	updateOnSelect: false,
+	onSelectItem: (val) => {
+		$("#sessionId").trigger("change");
+	}
+});
 
 function oncePerSecondAnim(callback) {
 	var frameFunc = function () {
@@ -158,7 +175,7 @@ $(document).on('click', '.recover-btn', function () {
 
 		// Iterate through the recovered stopwatch's journal and emit each event to the server
 		recoveredStopwatch.journal.forEach(event => {
-			socket.emit(event.type, { ...event, clientId, sessionId, userName });
+			socket.emit("msg", { ...event, clientId, sessionId, userName });
 		});
 
 		// send recover message
@@ -188,7 +205,9 @@ function loadStopwatchesFromJournal(journal) {
 				id: stopwatchId,
 				name: '',
 				running: false,
-				journal: []
+				journal: [],
+				sessionId: event.sessionId,
+				delete: false,
 			};
 			stopwatchMap.set(stopwatchId, stopwatch);
 		}
@@ -197,22 +216,39 @@ function loadStopwatchesFromJournal(journal) {
 		stopwatch.journal.push({ ...event, source: "syncJournal" });
 
 		if (type == 'toggleEvent') {
-			// TODO: Toggle based on journal
+			// Find the event in the stopwatch's journal based on time and type
+			const eventIndex = stopwatch.journal.findIndex(journalEvent => journalEvent.time === event.eventTime && journalEvent.type === event.eventType);
+			if (eventIndex !== -1) {
+				// Update the enabled status of the event
+				stopwatch.journal[eventIndex].enabled = event.enabled;
+			}
 		}
 
 		if (type == 'add') {
 			stopwatch.name = event.name;
 
 			// remove from deleted, if re-added
-			const deletedStopwatches = JSON.parse(localStorage.getItem('deletedStopwatches')) || [];
-			const existingDeletedIndex = deletedStopwatches.findIndex(stopwatch => stopwatch.id === stopwatchId);
-			if (existingDeletedIndex !== -1) {
-				deletedStopwatches.splice(existingDeletedIndex, 1);
-				localStorage.setItem('deletedStopwatches', JSON.stringify(deletedStopwatches));
-			}
+			//const deletedStopwatches = JSON.parse(localStorage.getItem('deletedStopwatches')) || [];
+			//const existingDeletedIndex = deletedStopwatches.findIndex(stopwatch => stopwatch.id === stopwatchId);
+			//if (existingDeletedIndex !== -1) {
+			//	deletedStopwatches.splice(existingDeletedIndex, 1);
+			//	localStorage.setItem('deletedStopwatches', JSON.stringify(deletedStopwatches));
+			//}
 		}
 
 		if (type == 'remove') {
+			stopwatch.delete = true;
+		}
+
+		if (type == 'recover') {
+			stopwatch.delete = false;
+		}
+
+	});
+
+	// Go through stopwatches to check deletes
+	stopwatchMap.forEach((stopwatch, stopwatchId) => {
+		if (stopwatch.delete) {
 			stopwatchMap.delete(stopwatchId);
 			const existingStopwatchIndex = (stopwatches[sessionId] || []).findIndex(stopwatch => stopwatch.id === stopwatchId);
 			if (existingStopwatchIndex !== -1) {
@@ -220,14 +256,15 @@ function loadStopwatchesFromJournal(journal) {
 				const existingDeletedIndex = deletedStopwatches.findIndex(stopwatch => stopwatch.id === stopwatchId);
 				if (existingDeletedIndex === -1) {
 					stopwatches[sessionId][existingStopwatchIndex].source = "reload";
-					deletedStopwatches.push(stopwatches[existingStopwatchIndex]);
+					deletedStopwatches.push(stopwatches[sessionId][existingStopwatchIndex]);
 					localStorage.setItem('deletedStopwatches', JSON.stringify(deletedStopwatches));
 				}
 				// remove local version
 				stopwatches[sessionId].splice(existingStopwatchIndex, 1);
+				$(`#stopwatch-${stopwatchId}`).remove();
+
 			}
 		}
-
 	});
 
 	// Convert the map of stopwatches to an array
@@ -254,9 +291,7 @@ socket.on('syncJournal', (journal) => {
 		if (existingStopwatchIndex !== -1) {
 			// Merge the journals of existing and loaded stopwatches
 			const existingStopwatch = stopwatches[sessionId][existingStopwatchIndex];
-			//console.log("Merge", JSON.parse(JSON.stringify(existingStopwatch.journal)), JSON.parse(JSON.stringify(loadedStopwatch.journal)));
 			existingStopwatch.journal = mergeSortedJournals(existingStopwatch.journal, loadedStopwatch.journal);
-			//console.log("Merged", existingStopwatch.journal);
 		} else {
 			stopwatches[sessionId].push(loadedStopwatch);
 		}
@@ -322,6 +357,7 @@ socket.on('msg', (event) => {
 		if (indexToRemove !== -1) {
 			const deletedStopwatches = JSON.parse(localStorage.getItem('deletedStopwatches')) || [];
 			stopwatches[sessionId][indexToRemove].source = "remote";
+			stopwatches[sessionId][indexToRemove].sessionId = event.sessionId;
 			deletedStopwatches.push(stopwatches[sessionId][indexToRemove]);
 			localStorage.setItem('deletedStopwatches', JSON.stringify(deletedStopwatches));
 
@@ -347,11 +383,42 @@ socket.on('msg', (event) => {
 				updateLaps(stopwatchId, false);
 			}
 		}
+	} else if (type == "recover") {
+		// Recover from deleted stopwatches
+		const deletedStopwatches = JSON.parse(localStorage.getItem('deletedStopwatches')) || [];
+		const indexToRemove = deletedStopwatches.findIndex(stopwatch => stopwatch.id === stopwatchId);
+
+		if (indexToRemove !== -1) {
+			const recoveredStopwatch = deletedStopwatches.splice(indexToRemove, 1)[0];
+			localStorage.setItem('deletedStopwatches', JSON.stringify(deletedStopwatches));
+
+			recoveredStopwatch.journal.sort((a, b) => a.time - b.time);
+
+			const existingStopwatchIndex = (stopwatches[sessionId] || []).findIndex(stopwatch => stopwatch.id === stopwatchId);
+			if (existingStopwatchIndex !== -1) {
+				stopwatches[sessionId][existingStopwatchIndex].journal.sort((a, b) => a.time - b.time);
+				// Merge the recovered stopwatch's journal with the existing one
+				stopwatches[sessionId][existingStopwatchIndex].journal = mergeSortedJournals(stopwatches[sessionId][existingStopwatchIndex].journal, recoveredStopwatch.journal);
+				renderStopwatchTime(stopwatchId);
+			} else {
+				// Add the recovered stopwatch to stopwatches array
+				if (typeof (stopwatches[sessionId]) === 'undefined') stopwatches[sessionId] = [];
+				stopwatches[sessionId].push(recoveredStopwatch);
+				renderStopwatch(recoveredStopwatch);
+			}
+
+			renderDeletedStopwatches();
+
+			// Update localStorage with the modified stopwatches array
+			updateLocalStopwatches();
+		}
 	} else {
 		const stopwatch = stopwatches[sessionId].find(stopwatch => stopwatch.id === stopwatchId);
 		if (stopwatch) {
-			stopwatch.journal.push({ ...event, source: "socketio" });
+			// Merge the event to journal
 			stopwatch.journal.sort((a, b) => a.time - b.time);
+			stopwatch.journal = mergeSortedJournals(stopwatch.journal, [{ ...event, source: "socketio" }]);
+
 			renderStopwatchTime(stopwatchId);
 			updateLocalStopwatches();
 			updateJournalList(stopwatchId, false);
@@ -367,18 +434,18 @@ function renderStopwatch(stopwatch) {
 		<h4 class="stopwatch-name">${stopwatch.name}</h4>
 		<p class="stopwatch-time">00:00:000</p>
 		<div class="stopwatch-buttons">
-			<button class="start-btn btn-success" data-id="${stopwatch.id}"><i class="fa-solid fa-play"></i></button>
-			<button class="stop-btn btn-warning" data-id="${stopwatch.id}"><i class="fa-solid fa-stop"></i></button>
-			<button class="lap-btn btn-secondary" data-id="${stopwatch.id}"><i class="fa-solid fa-plus"></i></button>
+			<button class="start-btn btn btn-success" data-id="${stopwatch.id}"><i class="fa-solid fa-play"></i></button>
+			<button class="stop-btn btn btn-warning" data-id="${stopwatch.id}"><i class="fa-solid fa-stop"></i></button>
+			<button class="lap-btn btn btn-secondary" data-id="${stopwatch.id}"><i class="fa-solid fa-plus"></i></button>
 		</div>
 		<div class="stopwatch-buttons stopwatch-buttons-smaller">
-			<button class="reset-btn btn-warning" data-id="${stopwatch.id}"><i class="fa-solid fa-redo"></i></button>
-			<button class="remove-btn btn-danger" data-id="${stopwatch.id}"><i class="fa-solid fa-trash"></i></button>
-			<button class="journal-btn btn-info" data-id="${stopwatch.id}"><i class="fa-solid fa-history"></i></button>
-			<button class="lap-times-btn btn-dark" data-id="${stopwatch.id}"><i class="fa-solid fa-list"></i></button>
+			<button class="reset-btn btn btn-warning" data-id="${stopwatch.id}"><i class="fa-solid fa-redo"></i></button>
+			<button class="remove-btn btn btn-danger" data-id="${stopwatch.id}"><i class="fa-solid fa-trash"></i></button>
+			<button class="journal-btn btn btn-info" data-id="${stopwatch.id}"><i class="fa-solid fa-history"></i></button>
+			<button class="lap-times-btn btn btn-dark" data-id="${stopwatch.id}"><i class="fa-solid fa-list"></i></button>
 		</div>
-		<ul class="journal-list" style="display:none" id="journal-list-${stopwatch.id}" data-id="${stopwatch.id}"></ul>
-		<div id="lap-times-container-${stopwatch.id}" style="display:none"></div>
+		<div class="journal-list container" style="display:none" id="journal-list-${stopwatch.id}" data-id="${stopwatch.id}"></div>
+		<div class="conteiner" id="lap-times-container-${stopwatch.id}" style="display:none"></div>
 	</div>
     `;
 	$('#stopwatches-container').append(stopwatchHtml);
@@ -394,7 +461,6 @@ function updateLaps(stopwatchId, toggle) {
 	const stopwatch = (stopwatches[sessionId] || []).find(stopwatch => stopwatch.id === stopwatchId);
 	if (stopwatch) {
 		const lapTimesContainer = document.getElementById(`lap-times-container-${stopwatchId}`);
-		//console.log(lapTimesContainer, `#lap-times-container-${stopwatchId}`);
 
 		const lapTimes = calculateLapTimes(stopwatch.journal);
 		stopwatch.lapTimes = lapTimes;
@@ -403,9 +469,15 @@ function updateLaps(stopwatchId, toggle) {
 		let cumulativeElapsedTime = 0; // Initialize cumulative elapsed time
 		// Calculate lap time and cumulative elapsed time for each lap
 		for (let i = 0; i < stopwatch.lapTimes.length; i++) {
-			const lapTime = stopwatch.lapTimes[i];
+			const lapTime = stopwatch.lapTimes[i].time;
+			const lapTaker = stopwatch.lapTimes[i].userName;
 			cumulativeElapsedTime += lapTime; // Add lap time to cumulative elapsed time
-			lapItems += `<p>Lap ${i + 1}: ${formatTime(lapTime, "milliseconds")} - ${formatTime(cumulativeElapsedTime, "milliseconds")}</p>`;
+			lapItems += `<div class="row">
+			<div class="col">Lap ${i + 1}</div>
+			<div class="col">${formatTime(lapTime, "milliseconds")}</div>
+			<div class="col">${formatTime(cumulativeElapsedTime, "milliseconds")}</div>
+			<div class="col">${lapTaker}</div>
+			</div>`;
 		}
 		lapTimesContainer.innerHTML = lapItems;
 
@@ -424,13 +496,18 @@ function updateJournalList(stopwatchId, toggle) {
 	const stopwatch = (stopwatches[sessionId] || []).find(stopwatch => stopwatch.id === stopwatchId);
 	if (stopwatch) {
 		const journalList = document.getElementById(`journal-list-${stopwatchId}`);
-		//console.log(journalList);
 
 		let items = "";
 		stopwatch.journal.forEach((event, index) => {
 			if (event.type == 'toggleEvent') return;
 			const checked = event.enabled ? 'checked' : '';
-			const listItem = `<li class="list-group-item" data-index="${index}"><input type="checkbox" ${checked}> ${event.type} - ${new Date(event.time).toLocaleString()} - ${event.clientId == clientId ? "Me" : event.clientId} - ${event.source || ""}</li>`;
+			const listItem = `<div class="row">
+				<div class="col-3" data-index="${index}">
+				<input type="checkbox" ${checked}> ${event.type}</div>
+				<div class="col-4">${new Date(event.time).toLocaleString()}</div>
+				<div class="col-3">${event.userName && event.userName !== "" ? event.userName : (event.clientId == clientId ? "Me" : event.clientId)}</div>
+				<div class="col-2">${event.source || ""}</div>
+			</div>`;
 			items = items.concat(listItem);
 		});
 		journalList.innerHTML = items;
@@ -439,14 +516,15 @@ function updateJournalList(stopwatchId, toggle) {
 }
 
 // Handle click event for toggling journal item
-$(document).on('change', '.journal-list li', function () {
+$(document).on('change', '.journal-list div div', function () {
+	// TODO: sometimes fires twice, when coming from unfocus
 	const toggleTime = new Date(ts.now()).getTime();
-	const stopwatchId = $(this).closest('ul').data('id');
+	const stopwatchId = $(this).closest('div.journal-list').data('id');
 	const index = $(this).data('index');
 	const stopwatch = (stopwatches[sessionId] || []).find(stopwatch => stopwatch.id === stopwatchId);
 	if (stopwatch && stopwatch.journal[index]) {
 		stopwatch.journal[index].enabled = !stopwatch.journal[index].enabled;
-		//console.log("Journal toggle", stopwatch.journal[index]);
+
 		updateLocalStopwatches();
 		updateLaps(stopwatchId, false);
 		// Emit event to server to synchronize status
@@ -505,6 +583,7 @@ $(document).on('click', '.stop-btn', function () {
 		// Update the stopwatch time on the UI
 		renderStopwatchTime(stopwatchId);
 		updateLocalStopwatches();
+		updateLaps(stopwatchId, false);
 		updateJournalList(stopwatchId, false);
 	}
 });
@@ -544,6 +623,7 @@ $(document).on('click', '.remove-btn', function () {
 	if (indexToRemove !== -1) {
 		const deletedStopwatches = JSON.parse(localStorage.getItem('deletedStopwatches')) || [];
 		stopwatches[sessionId][indexToRemove].source = "local";
+		stopwatches[sessionId][indexToRemove].sessionId = sessionId;
 		deletedStopwatches.push(stopwatches[sessionId][indexToRemove]);
 		localStorage.setItem('deletedStopwatches', JSON.stringify(deletedStopwatches));
 
@@ -673,13 +753,13 @@ function calculateLapTimes(journal) {
 		} else if (event.type === 'lap' && running) {
 			if (lastStartTime !== null) {
 				const lapTime = event.time - lastLapTime;
-				lapTimes.push(lapTime);
+				lapTimes.push({userName: event.userName, time: lapTime});
 				lastLapTime = event.time;
 			}
 		} else if (event.type === 'stop') {
 			// TODO: don't create a lap time from stop, except the last one
 			if (lastStartTime !== null) {
-				lapTimes.push(event.time - lastLapTime);
+				lapTimes.push({userName: event.userName, time: event.time - lastLapTime});
 				running = false;
 			}
 		} else if (event.type === 'reset') {

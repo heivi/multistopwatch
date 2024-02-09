@@ -50,4 +50,6 @@
 
 .journal-list {
 	text-align: left;
+  background-color: #fff;
+  overflow-x: hidden;
 }

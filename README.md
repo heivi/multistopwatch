@@ -44,11 +44,10 @@ To get started with the Stopwatch App, follow these steps:
 Contributions are welcome! If you find any bugs or have suggestions for improvements, please open an issue or submit a pull request.
 
 ## TODO
-- Separate sessions based on URL
-- Nicer journal
-- Style lap list
+- Fill sessionId based on URL
 - Indicate when offline
 - When starting offline, adjust times by the offset after sync
+- 
 
 ## License
 This project is licensed under the MIT License - see the LICENSE file for details.

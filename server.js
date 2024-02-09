@@ -1,4 +1,7 @@
 // server.js
+const MAX_SESSION_KEEP_TIME = 3 * 24 * 60 * 60 * 1000; // 3 days in milliseconds
+//const MAX_SESSION_KEEP_TIME = 1000; // 1 sec
+
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -36,7 +39,12 @@ io.on('connection', (socket) => {
 
 	// Handle session ID message from the client
 	socket.on('sessionId', (data) => {
-		socket.data.sessionId = data.sessionId;
+		if (socket.data.sessionId !== data.sessionId) {
+			socket.leave(socket.data.sessionId);
+			socket.join(data.sessionId);
+			socket.data.sessionId = data.sessionId;
+		}
+
 		socket.data.userName = data.userName;
 
 		// Create a new event journal for the session if it doesn't exist
@@ -50,7 +58,9 @@ io.on('connection', (socket) => {
 
 	// Handle msg event
 	socket.on('msg', (data) => {
-		if (data.sessionId != socket.data.sessionId) {
+		if (data.sessionId !== socket.data.sessionId) {
+			socket.leave(socket.data.sessionId);
+			socket.join(data.sessionId);
 			socket.data.sessionId = data.sessionId;
 		}
 		// Push event to the event journal for the corresponding session
@@ -63,6 +73,7 @@ io.on('connection', (socket) => {
 	// Handle disconnect event
 	socket.on('disconnect', () => {
 		console.log('Client disconnected:', socket.id, socket.data.sessionId, socket.data.userName);
+		cleanEventJournals();
 	});
 
 });
@@ -93,3 +104,42 @@ const saveInterval = 60000; // Save interval in milliseconds (e.g., every minute
 
 // Start saving event journals to disk at regular intervals
 setInterval(saveEventJournals, saveInterval);
+
+// Function to clean event journals
+function cleanEventJournals() {
+	const currentTime = Date.now();
+	for (const sessionId in eventJournals) {
+		const sessionEvents = eventJournals[sessionId];
+		const stopwatchesToRemove = new Set();
+
+		// Iterate through session events to identify stopwatches to remove
+		for (let i = 0; i < sessionEvents.length; i++) {
+			const event = sessionEvents[i];
+			if (event.type === "remove") {
+				// Check if all events after removal event are for the same stopwatch
+				let foundOtherEvents = false;
+				let removetime = event.time;
+				for (let j = i + 1; j < sessionEvents.length; j++) {
+					const nextEvent = sessionEvents[j];
+					if (nextEvent.stopwatchId === event.stopwatchId && nextEvent.type !== "remove") {
+						foundOtherEvents = true;
+						break;
+					}
+				}
+				if (!foundOtherEvents && currentTime - removetime > MAX_SESSION_KEEP_TIME) {
+					// If no other events found for the same stopwatch, mark for removal
+					stopwatchesToRemove.add(event.stopwatchId);
+				}
+			}
+		}
+
+		// Remove stopwatches from event journal
+		if (stopwatchesToRemove.size > 0) {
+			eventJournals[sessionId] = sessionEvents.filter(event => {
+				return !stopwatchesToRemove.has(event.stopwatchId);
+			});
+			changedSince = true; // Set the flag to indicate changes
+			console.log(`Removed ${stopwatchesToRemove.size} stopwatches from session ${sessionId}.`);
+		}
+	}
+}
