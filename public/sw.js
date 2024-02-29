@@ -1,6 +1,6 @@
 // Version 0.2
 // Files to cache
-const cacheName = 'multistop-v0.2';
+const cacheName = 'multistop-v0.3';
 const appShellFiles = [
   '/',
   '/app.js',
