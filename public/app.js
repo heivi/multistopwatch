@@ -9,11 +9,30 @@ if ("serviceWorker" in navigator) {
 const socket = io('/');
 let ts = timesync.create({
 	server: '/timesync', // endpoint for the timesync server
-	interval: 60000, // sync interval in milliseconds
+	interval: null, // sync interval in milliseconds
+	timeout: 500,
 });
 
 ts.on('change', (offset) => {
-	$("#offset").html(offset + " ms");
+	
+	if ($('#offsetms').val() != 0) {
+		ts.offset = parseInt($('#offsetms').val());
+		console.log("Offset",ts.offset);
+		return;
+	}
+	$("#offset").html(ts.offset + " ms");
+});
+
+ts.sync();
+
+$('#offsetms').on('change', (e) => {
+	if ($('#offsetms').val() == 0 || !$('#offsetms').val()) {
+		ts.sync();
+	} else {
+		ts.offset = parseInt($('#offsetms').val());
+		console.log("Manual offset change",ts.offset);
+		$("#offset").html(ts.offset + " ms");
+	}
 });
 
 let clientId = localStorage.getItem('clientId');
