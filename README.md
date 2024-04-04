@@ -1,6 +1,8 @@
 # Multi-Stopwatch App
 The Multi-Stopwatch App is a simple web application that allows users to create and manage multiple stopwatches simultaneously. Users can start, stop, and reset individual stopwatches, as well as record lap times.
 
+Made using ChatGPT
+
 ## Features
 - Create multiple stopwatches
 - Start, stop, and reset individual stopwatches
